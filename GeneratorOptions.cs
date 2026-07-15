@@ -1,8 +1,7 @@
 namespace DefScribe;
 
 public sealed record GeneratorOptions(string AssemblyPath, string OutputPath, string AssemblyDirectory) {
-    public const string Usage =
-        "Usage: defscribe [<assembly.dll>] [--assembly-dir <RimWorld Managed>]";
+    public const string Usage = "Usage: defscribe [<assembly.dll>] [--assembly-dir <RimWorld Managed>]";
 
     private static string DefaultAssemblyDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -61,7 +60,7 @@ public sealed record GeneratorOptions(string AssemblyPath, string OutputPath, st
 
         var outputPath = Path.Combine(
             Environment.CurrentDirectory,
-            Path.ChangeExtension(Path.GetFileName(assemblyPath), ".rng"));
+            Path.ChangeExtension(Path.GetFileName(assemblyPath), ".xsd"));
 
         return new GeneratorOptions(assemblyPath, outputPath, assemblyDirectory);
     }

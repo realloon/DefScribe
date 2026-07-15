@@ -21,8 +21,9 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         AddResolverDirectory(Path.GetDirectoryName(options.AssemblyPath));
         AddResolverDirectory(options.AssemblyDirectory);
 
-        using var module =
-            ModuleDefinition.ReadModule(options.AssemblyPath, new ReaderParameters { AssemblyResolver = _resolver });
+        using var module = ModuleDefinition.ReadModule(
+            options.AssemblyPath,
+            new ReaderParameters { AssemblyResolver = _resolver });
         IndexTypes(module);
 
         var rootDefTypes = _types.Values
@@ -34,32 +35,38 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
             EnsureComplexDefinition(type);
         }
 
-        var writer = new RngWriter();
-        writer.StartGrammar();
-        writer.StartElement("start");
-        writer.StartElement("element", ("name", "Defs"));
-        writer.StartElement("interleave");
-        WriteAnyAttributes(writer);
-        writer.StartElement("zeroOrMore");
-        writer.StartElement("choice");
-        foreach (var type in rootDefTypes) {
-            WriteElement(writer, type.Name, () => writer.EmptyElement("ref", ("name", TypeDefinitionName(type))));
-        }
-
-        writer.EndElement();
-        writer.EndElement();
-        writer.EndElement();
-        writer.EndElement();
-        writer.EndElement();
-
-        WriteAnyContentDefinition(writer);
+        var writer = new XsdWriter();
+        writer.StartSchema();
+        WriteRootElement(writer, rootDefTypes);
         foreach (var definition in _definitions.OrderBy(pair => pair.Key, StringComparer.Ordinal)) {
             writer.Raw(definition.Value);
         }
 
-        writer.EndGrammar();
-
+        writer.EndSchema();
         return new GenerationResult(writer.ToString(), _exactPatternCount, _conservativeTypes.ToArray());
+    }
+
+    private static void WriteRootElement(XsdWriter writer, IReadOnlyList<TypeDefinition> rootDefTypes) {
+        writer.Start("element", ("name", "Defs"));
+        writer.Start("complexType");
+        writer.Start("choice", ("minOccurs", "0"), ("maxOccurs", "unbounded"));
+
+        foreach (var group in rootDefTypes.GroupBy(type => type.Name, StringComparer.Ordinal)) {
+            writer.Start("element", ("name", group.Key));
+            var types = group.ToArray();
+            if (types.Length == 1) {
+                writer.Attribute("type", ComplexTypeName(types[0]));
+            } else {
+                WriteLooseComplexType(writer);
+            }
+
+            writer.End();
+        }
+
+        writer.End();
+        WriteAnyAttribute(writer);
+        writer.End();
+        writer.End();
     }
 
     private void AddResolverDirectory(string? directory) {
@@ -76,16 +83,13 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
 
     private static IEnumerable<TypeDefinition> Flatten(TypeDefinition type) {
         yield return type;
-
         foreach (var descendant in type.NestedTypes.SelectMany(Flatten)) {
             yield return descendant;
         }
     }
 
-    private TypeDefinition? Resolve(TypeReference? type) {
-        if (type is null) {
-            return null;
-        }
+    private static TypeDefinition? Resolve(TypeReference? type) {
+        if (type is null) return null;
 
         try {
             return type.Resolve();
@@ -95,47 +99,49 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
     }
 
     private void EnsureComplexDefinition(TypeDefinition type) {
-        var name = TypeDefinitionName(type);
-        if (_definitions.ContainsKey(name) || !_generating.Add(name)) {
-            return;
-        }
+        var name = ComplexTypeName(type);
+        if (_definitions.ContainsKey(name) || !_generating.Add(name)) return;
 
         try {
-            var definition = new RngWriter();
-            definition.StartElement("define", ("name", name));
+            var definition = new XsdWriter();
+            definition.Start("complexType", ("name", name));
 
             if (HasCustomLoader(type)) {
                 _conservativeTypes.Add(type.FullName);
-                definition.EmptyElement("ref", ("name", "any-content"));
+                WriteLooseComplexContent(definition);
             } else {
                 _exactPatternCount++;
                 var fieldGroups = GetFields(type)
-                    .GroupBy(field => field.Name, StringComparer.Ordinal)
+                    .SelectMany(field => GetElementNames(field).Select(n => (Name: n, Field: field)))
+                    .GroupBy(item => item.Name, StringComparer.Ordinal)
                     .OrderBy(group => group.Key, StringComparer.Ordinal)
                     .ToArray();
 
-                if (fieldGroups.Length == 0) {
-                    definition.EmptyElement("empty");
-                } else {
-                    definition.StartElement("interleave");
+                if (fieldGroups.Length > 0) {
+                    definition.Start("all");
                     foreach (var group in fieldGroups) {
-                        definition.StartElement("optional");
-                        WriteFieldElement(definition, group.ToArray());
-                        definition.EndElement();
+                        WriteValueElement(
+                            definition,
+                            group.Key,
+                            group.Select(item => item.Field).ToArray(),
+                            "0",
+                            "1");
                     }
 
-                    definition.EndElement();
+                    definition.End();
                 }
+
+                WriteAnyAttribute(definition);
             }
 
-            definition.EndElement();
+            definition.End();
             _definitions[name] = definition.ToString();
         } finally {
             _generating.Remove(name);
         }
     }
 
-    private IEnumerable<FieldDefinition> GetFields(TypeDefinition type) {
+    private static IEnumerable<FieldDefinition> GetFields(TypeDefinition type) {
         var hierarchy = new Stack<TypeDefinition>();
         for (var current = type;
              current is not null && current.FullName != "System.Object";
@@ -156,8 +162,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         var attribute = field.CustomAttributes.FirstOrDefault(candidate =>
             candidate.AttributeType.FullName == UnsavedAttributeName);
         return attribute is not null &&
-               (attribute.ConstructorArguments.Count == 0 ||
-                attribute.ConstructorArguments[0].Value is not true);
+               (attribute.ConstructorArguments.Count == 0 || attribute.ConstructorArguments[0].Value is not true);
     }
 
     private static bool IsXmlElementName(string name) {
@@ -169,7 +174,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         }
     }
 
-    private bool HasCustomLoader(TypeDefinition type) {
+    private static bool HasCustomLoader(TypeDefinition type) {
         for (var current = type;
              current is not null && current.FullName != "System.Object";
              current = Resolve(current.BaseType)) {
@@ -181,115 +186,119 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         return false;
     }
 
-    private void WriteFieldElement(RngWriter writer, IReadOnlyList<FieldDefinition> fields) {
-        var elementNames = fields
-            .SelectMany(GetElementNames)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToArray();
-
-        if (elementNames.Length == 1) {
-            WriteElement(writer, elementNames[0], () => WriteFieldValue(writer, fields));
-            return;
-        }
-
-        writer.StartElement("choice");
-        foreach (var elementName in elementNames) {
-            WriteElement(writer, elementName, () => WriteFieldValue(writer, fields));
-        }
-
-        writer.EndElement();
-    }
-
     private static IEnumerable<string> GetElementNames(FieldDefinition field) {
         yield return field.Name;
         foreach (var attribute in field.CustomAttributes.Where(candidate =>
                      candidate.AttributeType.FullName == LoadAliasAttributeName)) {
             if (attribute.ConstructorArguments.FirstOrDefault().Value is string alias &&
-                !string.IsNullOrWhiteSpace(alias)) {
+                !string.IsNullOrWhiteSpace(alias) && IsXmlElementName(alias)) {
                 yield return alias;
             }
         }
     }
 
-    private void WriteFieldValue(RngWriter writer, IReadOnlyList<FieldDefinition> fields) {
+    private void WriteValueElement(
+        XsdWriter writer,
+        string name,
+        IReadOnlyList<FieldDefinition> fields,
+        string minOccurs,
+        string maxOccurs) {
+        writer.Start("element", ("name", name), ("minOccurs", minOccurs), ("maxOccurs", maxOccurs));
         if (fields.Count == 1) {
-            WriteValuePattern(writer, fields[0].FieldType);
-            return;
+            WriteValueType(writer, fields[0].FieldType);
+        } else {
+            WriteLooseComplexType(writer);
         }
 
-        writer.StartElement("choice");
-        foreach (var field in fields) {
-            WriteValuePattern(writer, field.FieldType);
-        }
-
-        writer.EndElement();
+        writer.End();
     }
 
-    private void WriteValuePattern(RngWriter writer, TypeReference type) {
+    private void WriteValueType(XsdWriter writer, TypeReference type) {
         type = UnwrapNullable(type);
         var resolved = Resolve(type);
 
         if (resolved is not null && IsDef(resolved)) {
-            WriteDefReference(writer, resolved);
+            WriteSimpleContent(writer, EnsureDefReferenceType(resolved));
             return;
         }
 
         if (TryGetCollectionArguments(type, "System.Collections.Generic.List`1", out var listArguments) ||
             TryGetCollectionArguments(type, "System.Collections.Generic.HashSet`1", out listArguments)) {
-            writer.StartElement("zeroOrMore");
-            var itemType = Resolve(UnwrapNullable(listArguments[0]));
-            if (itemType is not null && HasCustomLoader(itemType)) {
-                WriteAnyElement(writer);
-            } else {
-                WriteElement(writer, "li", () => WriteValuePattern(writer, listArguments[0]));
-            }
-
-            writer.EndElement();
+            WriteListType(writer, listArguments[0]);
             return;
         }
 
         if (TryGetCollectionArguments(type, "System.Collections.Generic.Dictionary`2", out var dictionaryArguments)) {
-            writer.StartElement("zeroOrMore");
-            WriteElement(writer, "li", () => {
-                writer.StartElement("interleave");
-                WriteElement(writer, "key", () => WriteValuePattern(writer, dictionaryArguments[0]));
-                WriteElement(writer, "value", () => WriteValuePattern(writer, dictionaryArguments[1]));
-                writer.EndElement();
-            });
-            writer.EndElement();
+            WriteDictionaryType(writer, dictionaryArguments[0], dictionaryArguments[1]);
             return;
         }
 
         if (resolved?.IsEnum == true) {
             if (HasFlagsAttribute(resolved)) {
-                writer.EmptyElement("ref", ("name", "any-content"));
+                _conservativeTypes.Add(resolved.FullName);
+                WriteLooseComplexType(writer);
             } else {
-                WriteEnum(writer, resolved);
+                WriteSimpleContent(writer, EnsureEnumType(resolved));
             }
 
             return;
         }
 
-        if (TryWriteScalar(writer, type)) {
+        if (TryGetScalarType(type, out var scalarType)) {
+            WriteSimpleContent(writer, scalarType);
             return;
         }
 
         if (resolved is not null && (resolved.IsClass || resolved.IsValueType)) {
             if (HasConcreteSubtype(resolved)) {
                 _conservativeTypes.Add(resolved.FullName);
-                writer.EmptyElement("ref", ("name", "any-content"));
+                WriteLooseComplexType(writer);
                 return;
             }
 
             EnsureComplexDefinition(resolved);
-            writer.EmptyElement("ref", ("name", TypeDefinitionName(resolved)));
+            writer.Attribute("type", ComplexTypeName(resolved));
             return;
         }
 
         _conservativeTypes.Add(type.FullName);
-        writer.EmptyElement("ref", ("name", "any-content"));
+        WriteLooseComplexType(writer);
     }
+
+    private void WriteListType(XsdWriter writer, TypeReference itemType) {
+        writer.Start("complexType");
+        writer.Start("sequence");
+        var resolvedItemType = Resolve(UnwrapNullable(itemType));
+        if (resolvedItemType is not null && HasCustomLoader(resolvedItemType)) {
+            writer.Empty("any", ("minOccurs", "0"), ("maxOccurs", "unbounded"), ("processContents", "skip"));
+        } else {
+            WriteValueElement(writer, "li", [CreateSyntheticField(itemType)], "0", "unbounded");
+        }
+
+        writer.End();
+        WriteAnyAttribute(writer);
+        writer.End();
+    }
+
+    private void WriteDictionaryType(XsdWriter writer, TypeReference keyType, TypeReference valueType) {
+        writer.Start("complexType");
+        writer.Start("sequence");
+        writer.Start("element", ("name", "li"), ("minOccurs", "0"), ("maxOccurs", "unbounded"));
+        writer.Start("complexType");
+        writer.Start("all");
+        WriteValueElement(writer, "key", [CreateSyntheticField(keyType)], "0", "1");
+        WriteValueElement(writer, "value", [CreateSyntheticField(valueType)], "0", "1");
+        writer.End();
+        WriteAnyAttribute(writer);
+        writer.End();
+        writer.End();
+        writer.End();
+        WriteAnyAttribute(writer);
+        writer.End();
+    }
+
+    private static FieldDefinition CreateSyntheticField(TypeReference type) =>
+        new("value", FieldAttributes.Public, type);
 
     private static TypeReference UnwrapNullable(TypeReference type) {
         return type is GenericInstanceType { ElementType.FullName: "System.Nullable`1" } nullable
@@ -297,7 +306,9 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
             : type;
     }
 
-    private static bool TryGetCollectionArguments(TypeReference type, string collectionTypeName,
+    private static bool TryGetCollectionArguments(
+        TypeReference type,
+        string collectionTypeName,
         out IReadOnlyList<TypeReference> arguments) {
         if (type is GenericInstanceType generic && generic.ElementType.FullName == collectionTypeName) {
             arguments = generic.GenericArguments.ToArray();
@@ -308,14 +319,12 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         return false;
     }
 
-    private bool IsDef(TypeDefinition type) {
-        return IsAssignableTo(type, DefTypeName);
-    }
+    private static bool IsDef(TypeDefinition type) => IsAssignableTo(type, DefTypeName);
 
     private static bool HasFlagsAttribute(TypeDefinition type) =>
         type.CustomAttributes.Any(attribute => attribute.AttributeType.FullName == "System.FlagsAttribute");
 
-    private bool IsAssignableTo(TypeDefinition type, string baseTypeName) {
+    private static bool IsAssignableTo(TypeDefinition type, string baseTypeName) {
         for (var current = type;
              current is not null && current.FullName != "System.Object";
              current = Resolve(current.BaseType)) {
@@ -331,105 +340,90 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         _types.Values.Any(candidate => !candidate.IsAbstract && candidate.FullName != type.FullName &&
                                        IsAssignableTo(candidate, type.FullName));
 
-    private void WriteDefReference(RngWriter writer, TypeDefinition type) {
-        var name = $"def-ref.{Sanitize(type.FullName)}";
-        if (!_definitions.ContainsKey(name)) {
-            _definitions[name] =
-                $"<define name=\"{name}\"><data type=\"string\"><param name=\"pattern\">[A-Za-z0-9_-]+</param></data></define>";
+    private string EnsureDefReferenceType(TypeDefinition type) {
+        var name = $"D_{Sanitize(type.FullName)}";
+        if (_definitions.ContainsKey(name)) {
+            return name;
         }
 
-        writer.EmptyElement("ref", ("name", name));
+        _definitions[name] =
+            $"<xs:simpleType xmlns:xs=\"{XsdWriter.Namespace}\" name=\"{name}\"><xs:restriction base=\"xs:string\" /></xs:simpleType>";
+        return name;
     }
 
-    private static bool TryWriteScalar(RngWriter writer, TypeReference type) {
-        switch (type.FullName) {
-            case "System.String":
-            case "Verse.TaggedString":
-            case "System.Type":
-                writer.EmptyElement("text");
-                return true;
-            case "System.Boolean":
-                writer.StartElement("choice");
-                writer.TextElement("value", "true");
-                writer.TextElement("value", "false");
-                writer.EndElement();
-                return true;
-            case "System.SByte":
-            case "System.Byte":
-            case "System.Int16":
-            case "System.UInt16":
-            case "System.Int32":
-            case "System.UInt32":
-            case "System.Int64":
-            case "System.UInt64":
-                writer.EmptyElement("data", ("type", "integer"));
-                return true;
-            case "System.Single":
-            case "System.Double":
-            case "System.Decimal":
-                writer.EmptyElement("data", ("type", "decimal"));
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static void WriteEnum(RngWriter writer, TypeDefinition type) {
-        var names = type.Fields.Where(field => field.IsStatic).Select(field => field.Name).ToArray();
-        writer.StartElement("choice");
-        foreach (var name in names) {
-            writer.TextElement("value", name);
+    private string EnsureEnumType(TypeDefinition type) {
+        var name = $"E_{Sanitize(type.FullName)}";
+        if (_definitions.ContainsKey(name)) {
+            return name;
         }
 
-        writer.EndElement();
+        var writer = new XsdWriter();
+        writer.Start("simpleType", ("name", name));
+        writer.Start("restriction", ("base", "xs:string"));
+        foreach (var field in type.Fields.Where(field => field.IsStatic)) {
+            writer.Empty("enumeration", ("value", field.Name));
+        }
+
+        writer.End();
+        writer.End();
+        _definitions[name] = writer.ToString();
+        return name;
     }
 
-    private static void WriteElement(RngWriter writer, string name, Action content) {
-        writer.StartElement("element", ("name", name));
-        writer.StartElement("interleave");
-        WriteAnyAttributes(writer);
-        content();
-        writer.EndElement();
-        writer.EndElement();
+    private bool TryGetScalarType(TypeReference type, out string xsdType) {
+        xsdType = type.FullName switch {
+            "System.String" or "Verse.TaggedString" or "System.Type" => "xs:string",
+            "System.Boolean" => EnsureBooleanType(),
+            "System.SByte" or "System.Byte" or "System.Int16" or "System.UInt16" or "System.Int32" or
+                "System.UInt32" or "System.Int64" or "System.UInt64" => "xs:integer",
+            "System.Single" or "System.Double" or "System.Decimal" => "xs:decimal",
+            _ => string.Empty
+        };
+        return xsdType.Length > 0;
     }
 
-    private static void WriteAnyAttributes(RngWriter writer) {
-        writer.StartElement("zeroOrMore");
-        writer.StartElement("attribute");
-        writer.EmptyElement("anyName");
-        writer.EmptyElement("text");
-        writer.EndElement();
-        writer.EndElement();
+    private string EnsureBooleanType() {
+        const string booleanType = "B_Boolean";
+        if (_definitions.ContainsKey(booleanType)) {
+            return booleanType;
+        }
+
+        _definitions["B_True"] =
+            $"<xs:simpleType xmlns:xs=\"{XsdWriter.Namespace}\" name=\"B_True\"><xs:restriction base=\"xs:string\"><xs:length value=\"4\" /><xs:pattern value=\"[Tt][Rr][Uu][Ee]\" /></xs:restriction></xs:simpleType>";
+        _definitions["B_False"] =
+            $"<xs:simpleType xmlns:xs=\"{XsdWriter.Namespace}\" name=\"B_False\"><xs:restriction base=\"xs:string\"><xs:length value=\"5\" /><xs:pattern value=\"[Ff][Aa][Ll][Ss][Ee]\" /></xs:restriction></xs:simpleType>";
+        _definitions[booleanType] =
+            $"<xs:simpleType xmlns:xs=\"{XsdWriter.Namespace}\" name=\"{booleanType}\"><xs:union memberTypes=\"B_True B_False\" /></xs:simpleType>";
+        return booleanType;
     }
 
-    private static void WriteAnyContentDefinition(RngWriter writer) {
-        writer.StartElement("define", ("name", "any-content"));
-        writer.StartElement("interleave");
-        writer.StartElement("zeroOrMore");
-        writer.StartElement("choice");
-        writer.EmptyElement("text");
-        writer.StartElement("element");
-        writer.EmptyElement("anyName");
-        WriteAnyAttributes(writer);
-        writer.EmptyElement("ref", ("name", "any-content"));
-        writer.EndElement();
-        writer.EndElement();
-        writer.EndElement();
-        writer.EndElement();
-        writer.EndElement();
+    private static void WriteSimpleContent(XsdWriter writer, string baseType) {
+        writer.Start("complexType");
+        writer.Start("simpleContent");
+        writer.Start("extension", ("base", baseType));
+        WriteAnyAttribute(writer);
+        writer.End();
+        writer.End();
+        writer.End();
     }
 
-    private static void WriteAnyElement(RngWriter writer) {
-        writer.StartElement("element");
-        writer.EmptyElement("anyName");
-        writer.StartElement("interleave");
-        WriteAnyAttributes(writer);
-        writer.EmptyElement("ref", ("name", "any-content"));
-        writer.EndElement();
-        writer.EndElement();
+    private static void WriteLooseComplexType(XsdWriter writer) {
+        writer.Start("complexType", ("mixed", "true"));
+        WriteLooseComplexContent(writer);
+        writer.End();
     }
 
-    private static string TypeDefinitionName(TypeDefinition type) => $"type.{Sanitize(type.FullName)}";
+    private static void WriteLooseComplexContent(XsdWriter writer) {
+        writer.Start("sequence");
+        writer.Empty("any", ("minOccurs", "0"), ("maxOccurs", "unbounded"), ("processContents", "skip"));
+        writer.End();
+        WriteAnyAttribute(writer);
+    }
+
+    private static void WriteAnyAttribute(XsdWriter writer) =>
+        writer.Empty("anyAttribute", ("processContents", "skip"));
+
+    private static string ComplexTypeName(TypeDefinition type) => $"T_{Sanitize(type.FullName)}";
 
     private static string Sanitize(string value) {
         var builder = new StringBuilder(value.Length);
@@ -443,50 +437,44 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
 
 public sealed record GenerationResult(string Schema, int ExactPatternCount, IReadOnlyList<string> ConservativeTypes);
 
-internal sealed class RngWriter {
+internal sealed class XsdWriter {
+    public const string Namespace = "http://www.w3.org/2001/XMLSchema";
+
     private readonly StringBuilder _builder = new();
     private readonly XmlWriter _writer;
 
-    public RngWriter(bool includeXmlDeclaration = false) {
-        _writer = XmlWriter.Create(_builder,
-            new XmlWriterSettings { Indent = true, OmitXmlDeclaration = !includeXmlDeclaration });
+    public XsdWriter() {
+        _writer = XmlWriter.Create(_builder, new XmlWriterSettings { Indent = true, OmitXmlDeclaration = true });
     }
 
-    public void StartGrammar() {
-        _writer.WriteStartElement("grammar", "http://relaxng.org/ns/structure/1.0");
-        _writer.WriteAttributeString("datatypeLibrary", "http://www.w3.org/2001/XMLSchema-datatypes");
+    public void StartSchema() {
+        _writer.WriteStartElement("xs", "schema", Namespace);
+        _writer.WriteAttributeString("elementFormDefault", "unqualified");
+        _writer.WriteAttributeString("attributeFormDefault", "unqualified");
     }
 
-    public void EndGrammar() {
+    public void EndSchema() {
         _writer.WriteEndElement();
         _writer.Flush();
     }
 
-    public void StartElement(string name, params (string Name, string Value)[] attributes) {
-        _writer.WriteStartElement(name);
+    public void Start(string name, params (string Name, string Value)[] attributes) {
+        _writer.WriteStartElement("xs", name, Namespace);
         foreach (var (attributeName, value) in attributes) {
             _writer.WriteAttributeString(attributeName, value);
         }
     }
 
-    public void EndElement() => _writer.WriteEndElement();
+    public void Attribute(string name, string value) => _writer.WriteAttributeString(name, value);
 
-    public void EmptyElement(string name, params (string Name, string Value)[] attributes) {
-        _writer.WriteStartElement(name);
-        foreach (var (attributeName, value) in attributes) {
-            _writer.WriteAttributeString(attributeName, value);
-        }
-
-        _writer.WriteEndElement();
+    public void Empty(string name, params (string Name, string Value)[] attributes) {
+        Start(name, attributes);
+        End();
     }
 
-    public void TextElement(string name, string text) {
-        _writer.WriteElementString(name, text);
-    }
+    public void End() => _writer.WriteEndElement();
 
-    public void Raw(string xml) {
-        _writer.WriteRaw(xml);
-    }
+    public void Raw(string xml) => _writer.WriteRaw(xml);
 
     public override string ToString() {
         _writer.Flush();
