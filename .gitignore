@@ -1,5 +1,9 @@
+# C#
 bin/
 obj/
 
+# Rider
+.idea/.idea.RimXsd/.idea/workspace.xml
 *.user
+
 *.xsd
