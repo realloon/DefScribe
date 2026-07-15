@@ -4,6 +4,7 @@ obj/
 
 # Rider
 .idea/.idea.RimXsd/.idea/workspace.xml
+.idea/.idea.RimXsd/.idea/projectSettingsUpdater.xml
 *.user
 
 *.xsd
