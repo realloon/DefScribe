@@ -1,4 +1,4 @@
-using DefScribe;
+using RimXsd;
 
 try {
     var options = GeneratorOptions.Parse(args);

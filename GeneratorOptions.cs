@@ -1,7 +1,7 @@
-namespace DefScribe;
+namespace RimXsd;
 
 public sealed record GeneratorOptions(string AssemblyPath, string OutputPath, string AssemblyDirectory) {
-    public const string Usage = "Usage: defscribe [<assembly.dll>] [--assembly-dir <RimWorld Managed>]";
+    public const string Usage = "Usage: rimxsd [<assembly.dll>] [--assembly-dir <RimWorld Managed>]";
 
     private static string DefaultAssemblyDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

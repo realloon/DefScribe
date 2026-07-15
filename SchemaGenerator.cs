@@ -2,7 +2,7 @@ using System.Text;
 using System.Xml;
 using Mono.Cecil;
 
-namespace DefScribe;
+namespace RimXsd;
 
 public sealed class SchemaGenerator(GeneratorOptions options) {
     private const string DefTypeName = "Verse.Def";

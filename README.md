@@ -1,19 +1,19 @@
-# DefScribe
+# rimxsd
 
-DefScribe generates XML Schema 1.0 (`.xsd`) files from RimWorld's managed assemblies for validating the structure of Def XML files.
+rimxsd generates XML Schema 1.0 (`.xsd`) files from RimWorld's managed assemblies for validating the structure of Def XML files.
 
 ## Usage
 
 For the base game:
 
 ```sh
-defscribe
+rimxsd
 ```
 
 For a mod, pass the path to its DLL:
 
 ```sh
-defscribe /path/to/Mod.dll
+rimxsd /path/to/Mod.dll
 ```
 
 The schema is written to the current working directory with the DLL's file name: `Assembly-CSharp.dll` produces `Assembly-CSharp.xsd`, and `Mod.dll` produces `Mod.xsd`.
@@ -21,7 +21,7 @@ The schema is written to the current working directory with the DLL's file name:
 If RimWorld is installed in a non-standard location, specify the managed assembly directory:
 
 ```sh
-defscribe /path/to/Mod.dll --assembly-dir /path/to/RimWorld/Managed
+rimxsd /path/to/Mod.dll --assembly-dir /path/to/RimWorld/Managed
 ```
 
 ## Validation
