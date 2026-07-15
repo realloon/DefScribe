@@ -16,7 +16,7 @@ For a mod, pass the path to its DLL:
 rimxsd /path/to/Mod.dll
 ```
 
-The schema is written to the current working directory with the DLL's file name: `Assembly-CSharp.dll` produces `Assembly-CSharp.xsd`, and `Mod.dll` produces `Mod.xsd`.
+The schema is written to the current working directory with the DLL's file name.
 
 If RimWorld is installed in a non-standard location, specify the managed assembly directory:
 
@@ -26,14 +26,20 @@ rimxsd /path/to/Mod.dll --assembly-dir /path/to/RimWorld/Managed
 
 ## Validation
 
+To associate an XML file with the schema in VS Code, add this processing instruction before its root element:
+
+```xml
+<?xml-model href="Assembly-CSharp.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+```
+
 Use libxml2 to validate the generated schema:
 
 ```sh
 xmllint --noout --schema Assembly-CSharp.xsd Defs/Example.xml
 ```
 
-To associate an XML file with the schema in VS Code, add this processing instruction before its root element:
+## Build
 
-```xml
-<?xml-model href="Assembly-CSharp.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+```sh
+dotnet publish -c Release
 ```
