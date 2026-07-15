@@ -19,9 +19,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
 
     public GenerationResult Generate() {
         AddResolverDirectory(Path.GetDirectoryName(options.AssemblyPath));
-        foreach (var directory in options.AssemblyDirectories) {
-            AddResolverDirectory(directory);
-        }
+        AddResolverDirectory(options.AssemblyDirectory);
 
         using var module =
             ModuleDefinition.ReadModule(options.AssemblyPath, new ReaderParameters { AssemblyResolver = _resolver });
@@ -306,7 +304,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
             return true;
         }
 
-        arguments = Array.Empty<TypeReference>();
+        arguments = [];
         return false;
     }
 
