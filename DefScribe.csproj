@@ -14,5 +14,6 @@
   <ItemGroup>
     <None Remove=".gitignore" />
     <None Remove="README.md" />
+    <None Remove="DefScribe.sln.DotSettings" />
   </ItemGroup>
 </Project>
