@@ -55,7 +55,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         writer.Start("complexType");
         writer.Start("choice", ("minOccurs", "0"), ("maxOccurs", "unbounded"));
 
-        foreach (var group in rootDefTypes.GroupBy(type => type.Name, StringComparer.Ordinal)) {
+        foreach (var group in rootDefTypes.GroupBy(DefElementName, StringComparer.Ordinal)) {
             writer.Start("element", ("name", group.Key));
             var types = group.ToArray();
             if (types.Length == 1) {
@@ -72,6 +72,9 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         writer.End();
         writer.End();
     }
+
+    private static string DefElementName(TypeDefinition type) =>
+        type.Module.Assembly.Name.Name == "Assembly-CSharp" ? type.Name : type.FullName;
 
     private void AddResolverDirectory(string? directory) {
         if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory)) {
