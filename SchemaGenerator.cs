@@ -9,6 +9,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
     private const string UnsavedAttributeName = "Verse.UnsavedAttribute";
     private const string LoadAliasAttributeName = "Verse.LoadAliasAttribute";
     private const string CustomLoaderMethodName = "LoadDataFromXmlCustom";
+    private const string CommonAttributeGroupName = "A_CommonNodeAttributes";
 
     private readonly DefaultAssemblyResolver _resolver = new();
     private readonly Dictionary<string, TypeDefinition> _types = new(StringComparer.Ordinal);
@@ -35,8 +36,11 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
             EnsureComplexDefinition(type);
         }
 
+        EnsureBooleanType();
+
         var writer = new XsdWriter();
         writer.StartSchema();
+        WriteCommonAttributeGroup(writer);
         WriteRootElement(writer, rootDefTypes);
         foreach (var definition in _definitions.OrderBy(pair => pair.Key, StringComparer.Ordinal)) {
             writer.Raw(definition.Value);
@@ -64,7 +68,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         }
 
         writer.End();
-        WriteAnyAttribute(writer);
+        WriteCommonAttributeGroupReference(writer);
         writer.End();
         writer.End();
     }
@@ -131,7 +135,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
                     definition.End();
                 }
 
-                WriteAnyAttribute(definition);
+                WriteCommonAttributeGroupReference(definition);
             }
 
             definition.End();
@@ -276,7 +280,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         }
 
         writer.End();
-        WriteAnyAttribute(writer);
+        WriteCommonAttributeGroupReference(writer);
         writer.End();
     }
 
@@ -289,11 +293,11 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         WriteValueElement(writer, "key", [CreateSyntheticField(keyType)], "0", "1");
         WriteValueElement(writer, "value", [CreateSyntheticField(valueType)], "0", "1");
         writer.End();
-        WriteAnyAttribute(writer);
+        WriteCommonAttributeGroupReference(writer);
         writer.End();
         writer.End();
         writer.End();
-        WriteAnyAttribute(writer);
+        WriteCommonAttributeGroupReference(writer);
         writer.End();
     }
 
@@ -401,7 +405,7 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         writer.Start("complexType");
         writer.Start("simpleContent");
         writer.Start("extension", ("base", baseType));
-        WriteAnyAttribute(writer);
+        WriteCommonAttributeGroupReference(writer);
         writer.End();
         writer.End();
         writer.End();
@@ -419,6 +423,26 @@ public sealed class SchemaGenerator(GeneratorOptions options) {
         writer.End();
         WriteAnyAttribute(writer);
     }
+
+    private static void WriteCommonAttributeGroup(XsdWriter writer) {
+        writer.Start("attributeGroup", ("name", CommonAttributeGroupName));
+        writer.Empty("attribute", ("name", "Abstract"), ("type", "B_Boolean"));
+        writer.Empty("attribute", ("name", "Class"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "IfModActive"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "IfModActiveAll"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "IfModNotActive"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "IgnoreIfNoMatchingField"), ("type", "B_Boolean"));
+        writer.Empty("attribute", ("name", "Inherit"), ("type", "B_Boolean"));
+        writer.Empty("attribute", ("name", "IsNull"), ("type", "B_Boolean"));
+        writer.Empty("attribute", ("name", "MayRequire"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "MayRequireAnyOf"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "Name"), ("type", "xs:string"));
+        writer.Empty("attribute", ("name", "ParentName"), ("type", "xs:string"));
+        writer.End();
+    }
+
+    private static void WriteCommonAttributeGroupReference(XsdWriter writer) =>
+        writer.Empty("attributeGroup", ("ref", CommonAttributeGroupName));
 
     private static void WriteAnyAttribute(XsdWriter writer) =>
         writer.Empty("anyAttribute", ("processContents", "skip"));
